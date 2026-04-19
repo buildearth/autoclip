@@ -4,13 +4,6 @@ services:
     container_name: autoclip-redis-dev
     ports:
       - "6379:6379"
-    environment:
-      - TZ=Asia/Shanghai
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 5s
-      timeout: 3s
-      retries: 5
 
   autoclip-dev:
     build:
@@ -24,22 +17,10 @@ services:
       - ./backend:/app/backend
       - ./frontend:/app/frontend
       - ./data:/app/data
-      - ./logs:/app/logs
       - /app/venv
-      - /etc/localtime:/etc/localtime:ro
-      - /etc/timezone:/etc/timezone:ro
-    environment:
-      - TZ=Asia/Shanghai
-      - REDIS_URL=redis://redis:6379/0
-      - CELERY_BROKER_URL=redis://redis:6379/0
-      - CELERY_RESULT_BACKEND=redis://redis:6379/0
-      - DATABASE_URL=sqlite:///./data/autoclip.db
-      - ENVIRONMENT=development
-      - DEBUG=true
-      - LOG_LEVEL=DEBUG
     depends_on:
-      redis:
-        condition: service_healthy
+      - redis
+    # 核心修改：sh 环境下使用 . 激活虚拟环境
     command: >
       sh -c "
         . venv/bin/activate &&
@@ -57,28 +38,23 @@ services:
     container_name: autoclip-celery-worker-dev
     volumes:
       - ./backend:/app/backend
-      - ./data:/app/data
-      - ./logs:/app/logs
-      - ./uploads:/app/uploads
+      - ./data:/app/data        # 建议加上数据目录
+      - ./logs:/app/logs        # 建议加上日志目录
+      - ./uploads:/app/uploads  # 建议加上上传目录
       - /app/venv
-      - /etc/localtime:/etc/localtime:ro
-      - /etc/timezone:/etc/timezone:ro
+    # --- 添加下面这部分 ---
     environment:
-      - TZ=Asia/Shanghai
       - REDIS_URL=redis://redis:6379/0
-      - CELERY_BROKER_URL=redis://redis:6379/0
-      - CELERY_RESULT_BACKEND=redis://redis:6379/0
       - DATABASE_URL=sqlite:///./data/autoclip.db
       - ENVIRONMENT=development
       - DEBUG=true
       - LOG_LEVEL=DEBUG
+    # -----------------------
     depends_on:
-      redis:
-        condition: service_healthy
-      autoclip-dev:
-        condition: service_started
+      - redis
+      - autoclip-dev
     command: >
       sh -c "
         . venv/bin/activate &&
-        celery -A backend.core.celery_app worker --loglevel=debug --concurrency=2
+        celery -A backend.core.celery_app worker --loglevel=debug
       "

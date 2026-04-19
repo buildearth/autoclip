@@ -17,6 +17,8 @@ venv/
 env/
 .venv/
 
+# 前端文件
+frontend/node_modules/
 # 视频和媒体文件
 *.mp4
 *.mkv
