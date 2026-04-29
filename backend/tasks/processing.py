@@ -54,14 +54,14 @@ def run_async_notification(coro):
             loop.close()
 
 @celery_app.task(bind=True, name='backend.tasks.processing.process_video_pipeline')
-def process_video_pipeline(self, project_id: str, input_video_path: str, input_srt_path: str) -> Dict[str, Any]:
+def process_video_pipeline(self, project_id: str, input_video_path: str, input_srt_path: Optional[str]) -> Dict[str, Any]:
     """
     处理视频流水线任务 - 使用Pipeline适配器
     
     Args:
         project_id: 项目ID
         input_video_path: 输入视频路径
-        input_srt_path: 输入SRT路径
+        input_srt_path: 输入SRT路径，可为空
         
     Returns:
         处理结果

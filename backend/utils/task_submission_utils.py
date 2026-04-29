@@ -9,14 +9,14 @@ from ..core.celery_app import celery_app
 
 logger = logging.getLogger(__name__)
 
-def submit_video_pipeline_task(project_id: str, input_video_path: str, input_srt_path: str) -> Dict[str, Any]:
+def submit_video_pipeline_task(project_id: str, input_video_path: str, input_srt_path: Optional[str]) -> Dict[str, Any]:
     """
     提交视频流水线任务
     
     Args:
         project_id: 项目ID
         input_video_path: 输入视频路径
-        input_srt_path: 输入SRT路径
+        input_srt_path: 输入SRT路径，可为空
         
     Returns:
         任务提交结果

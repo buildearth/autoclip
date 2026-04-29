@@ -9,6 +9,7 @@ from .notification import *
 from .maintenance import *
 from .upload import *  # 添加upload任务导入
 from .data_cleanup import *  # 添加数据清理任务导入
+from .import_processing import *  # 添加本地导入任务
 
 __all__ = [
     # 处理任务
@@ -38,5 +39,8 @@ __all__ = [
     
     # 投稿任务
     'upload_clip_task',
-    'batch_upload_task'
-] 
+    'batch_upload_task',
+    
+    # 本地导入任务
+    'process_import_task'
+]

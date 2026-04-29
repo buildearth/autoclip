@@ -70,14 +70,8 @@ class CeleryConfig:
 # 应用配置
 celery_app.config_from_object(CeleryConfig)
 
-# 自动发现任务
-celery_app.autodiscover_tasks([
-    'backend.tasks.processing',
-    'backend.tasks.video', 
-    'backend.tasks.notification',
-    'backend.tasks.maintenance',
-    'backend.tasks.import_processing'  # 添加导入处理任务
-])
+# 显式导入任务模块，确保 worker 启动时完成注册
+import backend.tasks  # noqa: F401
 
 if __name__ == '__main__':
     celery_app.start()

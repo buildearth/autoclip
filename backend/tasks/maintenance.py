@@ -9,6 +9,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Dict, Any, List, Optional
 from celery import current_task, shared_task
+from sqlalchemy import text
 
 from ..core.celery_app import celery_app
 from ..core.database import SessionLocal
@@ -103,7 +104,7 @@ def health_check(self) -> Dict[str, Any]:
         # 检查数据库连接
         try:
             db = SessionLocal()
-            db.execute("SELECT 1")
+            db.execute(text("SELECT 1"))
             db.close()
             health_status['checks']['database'] = {'status': 'healthy', 'message': '数据库连接正常'}
         except Exception as e:

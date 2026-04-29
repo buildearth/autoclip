@@ -3,6 +3,7 @@
 """
 
 import logging
+import re
 from typing import List, Optional
 from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File, Form
@@ -24,6 +25,51 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
+SRT_TIME_PATTERN = re.compile(
+    r"^\d{2}:\d{2}:\d{2}[,.]\d{3}\s*-->\s*\d{2}:\d{2}:\d{2}[,.]\d{3}$",
+    re.MULTILINE
+)
+
+
+def _seconds_to_srt_timestamp(total_seconds: int) -> str:
+    hours = total_seconds // 3600
+    minutes = (total_seconds % 3600) // 60
+    seconds = total_seconds % 60
+    return f"{hours:02d}:{minutes:02d}:{seconds:02d},000"
+
+
+def _normalize_subtitle_content_to_srt(subtitle_content: str) -> str:
+    """将用户输入的字幕内容标准化为SRT文本。"""
+    content = subtitle_content.strip().replace("\r\n", "\n")
+    if not content:
+        return ""
+
+    if SRT_TIME_PATTERN.search(content):
+        return content
+
+    blocks = [block.strip() for block in re.split(r"\n\s*\n", content) if block.strip()]
+    if not blocks:
+        blocks = [line.strip() for line in content.splitlines() if line.strip()]
+
+    srt_entries: List[str] = []
+    current_start = 0
+
+    for index, block in enumerate(blocks, start=1):
+        lines = [line.strip() for line in block.splitlines() if line.strip()]
+        if not lines:
+            continue
+
+        text = "\n".join(lines)
+        # 按文本长度粗略估算展示时长，限制在 2-8 秒之间
+        duration = min(8, max(2, len("".join(lines)) // 12 + 2))
+        start_ts = _seconds_to_srt_timestamp(current_start)
+        end_ts = _seconds_to_srt_timestamp(current_start + duration)
+        srt_entries.append(f"{index}\n{start_ts} --> {end_ts}\n{text}")
+        current_start += duration
+
+    return "\n\n".join(srt_entries)
+
+
 def get_project_service(db: Session = Depends(get_db)) -> ProjectService:
     """Dependency to get project service."""
     return ProjectService(db)
@@ -43,11 +89,13 @@ def get_websocket_service():
 async def upload_files(
     video_file: UploadFile = File(...),
     srt_file: Optional[UploadFile] = File(None),
+    subtitle_content: Optional[str] = Form(None),
+    auto_generate_subtitle: bool = Form(False),
     project_name: str = Form(...),
     video_category: Optional[str] = Form(None),
     project_service: ProjectService = Depends(get_project_service)
 ):
-    """Upload video file and optional subtitle file to create a new project. If no subtitle is provided, Whisper will automatically generate one."""
+    """Upload video file and subtitle source to create a new project."""
     try:
         # 验证视频文件类型
         if not video_file.filename.lower().endswith(('.mp4', '.avi', '.mov', '.mkv', '.webm')):
@@ -56,9 +104,24 @@ async def upload_files(
         # 验证字幕文件类型（如果提供）
         if srt_file and not srt_file.filename.lower().endswith('.srt'):
             raise HTTPException(status_code=400, detail="Invalid subtitle file format")
+
+        subtitle_content = subtitle_content.strip() if subtitle_content else None
+        if not srt_file and not subtitle_content and not auto_generate_subtitle:
+            raise HTTPException(status_code=400, detail="Please provide a subtitle file, subtitle content, or enable auto subtitle generation")
         
         # 创建项目数据
-        subtitle_info = srt_file.filename if srt_file else "Whisper自动生成"
+        if srt_file:
+            subtitle_info = srt_file.filename
+            subtitle_source = "file"
+        elif subtitle_content:
+            subtitle_info = "用户输入字幕内容"
+            subtitle_source = "text"
+        elif auto_generate_subtitle:
+            subtitle_info = "自动生成字幕"
+            subtitle_source = "auto"
+        else:
+            subtitle_info = "无字幕"
+            subtitle_source = "none"
         project_data = ProjectCreate(
             name=project_name,
             description=f"Video: {video_file.filename}, Subtitle: {subtitle_info}",
@@ -69,7 +132,9 @@ async def upload_files(
             settings={
                 "video_category": video_category or "knowledge",
                 "video_file": video_file.filename,
-                "srt_file": subtitle_info
+                "srt_file": "input.srt" if (srt_file or subtitle_content) else None,
+                "subtitle_source": subtitle_source,
+                "auto_generate_subtitle": auto_generate_subtitle
             }
         )
         
@@ -115,6 +180,12 @@ async def upload_files(
                 content = await srt_file.read()
                 f.write(content)
             logger.info(f"用户提供的字幕文件已保存: {srt_path}")
+        elif subtitle_content:
+            srt_path = raw_dir / "input.srt"
+            normalized_subtitle = _normalize_subtitle_content_to_srt(subtitle_content)
+            with open(srt_path, "w", encoding="utf-8") as f:
+                f.write(normalized_subtitle)
+            logger.info(f"用户输入的字幕内容已保存: {srt_path}")
         
         # 启动异步处理任务
         try:
@@ -147,7 +218,9 @@ async def upload_files(
             "settings": {
                 "video_category": video_category or "knowledge",
                 "video_file": video_file.filename,
-                "srt_file": subtitle_info
+                "srt_file": "input.srt" if (srt_file or subtitle_content) else None,
+                "subtitle_source": subtitle_source,
+                "auto_generate_subtitle": auto_generate_subtitle
             },  # 只包含可序列化的数据
             "created_at": project.created_at,
             "updated_at": project.updated_at,

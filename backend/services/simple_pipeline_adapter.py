@@ -23,6 +23,24 @@ class SimplePipelineAdapter:
     def __init__(self, project_id: str, task_id: str):
         self.project_id = project_id
         self.task_id = task_id
+
+    def _should_auto_generate_subtitle(self) -> bool:
+        """根据项目配置决定是否自动生成字幕"""
+        try:
+            from backend.core.database import SessionLocal
+            from backend.models.project import Project
+
+            db = SessionLocal()
+            try:
+                project = db.query(Project).filter(Project.id == self.project_id).first()
+                if not project or not project.processing_config:
+                    return False
+                return bool(project.processing_config.get("auto_generate_subtitle", False))
+            finally:
+                db.close()
+        except Exception as e:
+            logger.warning(f"读取项目字幕配置失败，默认不自动生成字幕: {e}")
+            return False
         
     async def _generate_subtitle_automatically(self, video_path: str, metadata_dir: Path) -> Path:
         """
@@ -144,14 +162,24 @@ class SimplePipelineAdapter:
                 logger.info(f"使用现有SRT文件: {input_srt_path}")
                 outlines = run_step1_outline(Path(input_srt_path), metadata_dir=metadata_dir)
             else:
-                logger.warning("没有SRT文件，尝试自动生成字幕")
-                # 尝试自动生成字幕
-                srt_path = await self._generate_subtitle_automatically(input_video_path, metadata_dir)
-                if srt_path and srt_path.exists():
-                    logger.info(f"自动生成字幕成功: {srt_path}")
-                    outlines = run_step1_outline(srt_path, metadata_dir=metadata_dir)
+                auto_generate_subtitle = self._should_auto_generate_subtitle()
+                if auto_generate_subtitle:
+                    logger.warning("没有SRT文件，尝试自动生成字幕")
+                    # 尝试自动生成字幕
+                    srt_path = await self._generate_subtitle_automatically(input_video_path, metadata_dir)
+                    if srt_path and srt_path.exists():
+                        logger.info(f"自动生成字幕成功: {srt_path}")
+                        outlines = run_step1_outline(srt_path, metadata_dir=metadata_dir)
+                    else:
+                        logger.warning("自动生成字幕失败，创建空大纲")
+                        # 创建一个空的大纲文件
+                        outlines = []
+                        outline_file = metadata_dir / "step1_outline.json"
+                        import json
+                        with open(outline_file, 'w', encoding='utf-8') as f:
+                            json.dump(outlines, f, ensure_ascii=False, indent=2)
                 else:
-                    logger.warning("自动生成字幕失败，创建空大纲")
+                    logger.info("未启用自动字幕生成，创建空大纲")
                     # 创建一个空的大纲文件
                     outlines = []
                     outline_file = metadata_dir / "step1_outline.json"

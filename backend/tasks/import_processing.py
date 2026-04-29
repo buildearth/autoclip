@@ -6,7 +6,6 @@
 import logging
 from pathlib import Path
 from typing import Optional
-from celery import Celery
 from backend.core.database import get_db
 from backend.services.project_service import ProjectService
 from backend.utils.thumbnail_generator import generate_project_thumbnail
@@ -63,38 +62,45 @@ def process_import_task(self, project_id: str, video_path: str, srt_file_path: O
         # 2. 生成字幕（如果没有提供）
         srt_path = srt_file_path
         if not srt_path:
-            logger.info(f"开始为项目 {project_id} 生成字幕...")
-            self.update_state(state='PROGRESS', meta={'progress': 40, 'message': '生成字幕...'})
-            
-            try:
-                from backend.utils.speech_recognizer import generate_subtitle_for_video
+            project = project_service.get(project_id)
+            auto_generate_subtitle = False
+            if project and project.processing_config:
+                auto_generate_subtitle = bool(project.processing_config.get("auto_generate_subtitle", False))
+
+            if auto_generate_subtitle:
+                logger.info(f"开始为项目 {project_id} 生成字幕...")
+                self.update_state(state='PROGRESS', meta={'progress': 40, 'message': '生成字幕...'})
                 
-                # 根据视频分类选择模型
-                project = project_service.get(project_id)
-                video_category = "knowledge"  # 默认分类
-                if project and project.processing_config:
-                    video_category = project.processing_config.get("video_category", "knowledge")
-                
-                model = "base"  # 默认使用平衡模型
-                if video_category in ["business", "knowledge"]:
-                    model = "small"  # 知识类内容使用更准确的模型
-                elif video_category == "speech":
-                    model = "medium"  # 演讲内容使用高精度模型
-                
-                logger.info(f"使用Whisper生成字幕 - 语言: auto, 模型: {model}")
-                
-                generated_subtitle = generate_subtitle_for_video(
-                    Path(video_path),
-                    language="auto",
-                    model=model
-                )
-                srt_path = str(generated_subtitle)
-                logger.info(f"Whisper字幕生成成功: {srt_path}")
-                
-            except Exception as e:
-                logger.error(f"Whisper字幕生成失败: {str(e)}")
-                # 字幕生成失败，使用空字幕文件
-                srt_path = None
+                try:
+                    from backend.utils.speech_recognizer import generate_subtitle_for_video
+                    
+                    video_category = "knowledge"  # 默认分类
+                    if project and project.processing_config:
+                        video_category = project.processing_config.get("video_category", "knowledge")
+                    
+                    model = "base"  # 默认使用平衡模型
+                    if video_category in ["business", "knowledge"]:
+                        model = "small"  # 知识类内容使用更准确的模型
+                    elif video_category == "speech":
+                        model = "medium"  # 演讲内容使用高精度模型
+                    
+                    logger.info(f"使用Whisper生成字幕 - 语言: auto, 模型: {model}")
+                    
+                    generated_subtitle = generate_subtitle_for_video(
+                        Path(video_path),
+                        output_path=Path(video_path).with_suffix(".srt"),
+                        method="auto",
+                        language="auto",
+                        model=model
+                    )
+                    srt_path = str(generated_subtitle)
+                    logger.info(f"Whisper字幕生成成功: {srt_path}")
+                    
+                except Exception as e:
+                    logger.error(f"Whisper字幕生成失败: {str(e)}")
+                    srt_path = None
+            else:
+                logger.info(f"项目 {project_id} 未启用自动字幕生成，跳过字幕生成")
         
         # 3. 更新项目状态为处理中
         logger.info(f"更新项目 {project_id} 状态为处理中...")
@@ -103,33 +109,31 @@ def process_import_task(self, project_id: str, video_path: str, srt_file_path: O
         project_service.update_project_status(project_id, "processing")
         
         # 4. 启动处理流程
-        if srt_path and Path(srt_path).exists():
-            try:
-                task_result = submit_video_pipeline_task(
-                    project_id=project_id,
-                    input_video_path=video_path,
-                    input_srt_path=srt_path
-                )
-                
-                if task_result['success']:
-                    logger.info(f"项目 {project_id} 处理任务已启动，Celery任务ID: {task_result['task_id']}")
-                    self.update_state(state='PROGRESS', meta={'progress': 100, 'message': '处理流程已启动'})
-                else:
-                    logger.error(f"Celery任务提交失败: {task_result['error']}")
-                    project_service.update_project_status(project_id, "failed")
-                    self.update_state(state='FAILURE', meta={'error': task_result['error']})
-                    return
-                    
-            except Exception as e:
-                logger.error(f"启动项目 {project_id} 处理失败: {str(e)}")
+        try:
+            if srt_path and Path(srt_path).exists():
+                logger.info(f"使用字幕文件启动主流水线: {srt_path}")
+            else:
+                logger.warning(f"字幕文件不存在或生成失败，主流水线将自行兜底: {srt_path}")
+                srt_path = None
+
+            task_result = submit_video_pipeline_task(
+                project_id=project_id,
+                input_video_path=video_path,
+                input_srt_path=srt_path
+            )
+            
+            if task_result['success']:
+                logger.info(f"项目 {project_id} 处理任务已启动，Celery任务ID: {task_result['task_id']}")
+                self.update_state(state='PROGRESS', meta={'progress': 100, 'message': '处理流程已启动'})
+            else:
+                logger.error(f"Celery任务提交失败: {task_result['error']}")
                 project_service.update_project_status(project_id, "failed")
-                self.update_state(state='FAILURE', meta={'error': str(e)})
-                return
-        else:
-            logger.error(f"字幕文件不存在: {srt_path}")
+                raise RuntimeError(task_result['error'])
+                
+        except Exception as e:
+            logger.error(f"启动项目 {project_id} 处理失败: {str(e)}")
             project_service.update_project_status(project_id, "failed")
-            self.update_state(state='FAILURE', meta={'error': '字幕文件不存在'})
-            return
+            raise
         
         logger.info(f"导入任务完成: {project_id}")
         return {
@@ -149,11 +153,9 @@ def process_import_task(self, project_id: str, video_path: str, srt_file_path: O
         except:
             pass
         
-        self.update_state(state='FAILURE', meta={'error': str(e)})
         raise
     finally:
         try:
             db.close()
         except:
             pass
-

@@ -54,6 +54,8 @@ api.interceptors.response.use(
 export interface UploadFilesRequest {
   video_file: File
   srt_file?: File
+  subtitle_content?: string
+  auto_generate_subtitle?: boolean
   project_name: string
   video_category?: string
 }
@@ -173,6 +175,10 @@ export const projectApi = {
     if (data.srt_file) {
       formData.append('srt_file', data.srt_file)
     }
+    if (data.subtitle_content?.trim()) {
+      formData.append('subtitle_content', data.subtitle_content.trim())
+    }
+    formData.append('auto_generate_subtitle', String(Boolean(data.auto_generate_subtitle)))
     formData.append('project_name', data.project_name)
     if (data.video_category) {
       formData.append('video_category', data.video_category)

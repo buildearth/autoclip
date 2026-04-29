@@ -1,23 +1,27 @@
-import React, { useState, useEffect } from 'react'
-import { Button, message, Progress, Space, Typography, Card, Input, Spin } from 'antd'
+import React, { useState, useEffect, useRef } from 'react'
+import { Button, message, Progress, Space, Typography, Input, Checkbox } from 'antd'
 import { InboxOutlined, VideoCameraOutlined, FileTextOutlined, SubnodeOutlined } from '@ant-design/icons'
 import { useDropzone } from 'react-dropzone'
 import { projectApi, VideoCategory, VideoCategoriesResponse } from '../services/api'
 import { useProjectStore } from '../store/useProjectStore'
 
 const { Text, Title } = Typography
+const { TextArea } = Input
 
 interface FileUploadProps {
   onUploadSuccess?: (projectId: string) => void
 }
 
 const FileUpload: React.FC<FileUploadProps> = ({ onUploadSuccess }) => {
+  const subtitleInputRef = useRef<HTMLInputElement>(null)
   const [uploading, setUploading] = useState(false)
   const [uploadProgress, setUploadProgress] = useState(0)
   const [projectName, setProjectName] = useState('')
   const [selectedCategory, setSelectedCategory] = useState<string>('')
   const [categories, setCategories] = useState<VideoCategory[]>([])
   const [loadingCategories, setLoadingCategories] = useState(false)
+  const [subtitleContent, setSubtitleContent] = useState('')
+  const [autoGenerateSubtitle, setAutoGenerateSubtitle] = useState(false)
   const [files, setFiles] = useState<{
     video?: File
     srt?: File
@@ -71,11 +75,27 @@ const FileUpload: React.FC<FileUploadProps> = ({ onUploadSuccess }) => {
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
     onDrop,
     accept: {
-      'video/*': ['.mp4', '.avi', '.mov', '.mkv', '.webm'],
-      'application/x-subrip': ['.srt']
+      'video/*': ['.mp4', '.avi', '.mov', '.mkv', '.webm']
     },
-    multiple: true
+    multiple: false
   })
+
+  const handleSubtitleFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0]
+    if (!file) {
+      return
+    }
+
+    const extension = file.name.split('.').pop()?.toLowerCase()
+    if (extension !== 'srt') {
+      message.error('请选择 .srt 格式的字幕文件')
+      event.target.value = ''
+      return
+    }
+
+    setFiles(prev => ({ ...prev, srt: file }))
+    event.target.value = ''
+  }
 
   const handleUpload = async () => {
     if (!files.video) {
@@ -85,6 +105,11 @@ const FileUpload: React.FC<FileUploadProps> = ({ onUploadSuccess }) => {
 
     if (!projectName.trim()) {
       message.error('请输入项目名称')
+      return
+    }
+
+    if (!files.srt && !subtitleContent.trim() && !autoGenerateSubtitle) {
+      message.error('请上传字幕文件、输入字幕内容，或勾选自动生成字幕')
       return
     }
 
@@ -107,7 +132,9 @@ const FileUpload: React.FC<FileUploadProps> = ({ onUploadSuccess }) => {
 
       console.log('开始上传文件:', {
         video_file: files.video.name,
-        srt_file: files.srt?.name || '(将使用语音识别生成)',
+        srt_file: files.srt?.name || null,
+        subtitle_content: subtitleContent.trim() ? '(手动输入字幕内容)' : null,
+        auto_generate_subtitle: autoGenerateSubtitle,
         project_name: projectName.trim(),
         video_category: selectedCategory
       })
@@ -115,6 +142,8 @@ const FileUpload: React.FC<FileUploadProps> = ({ onUploadSuccess }) => {
       const newProject = await projectApi.uploadFiles({
         video_file: files.video,
         srt_file: files.srt,
+        subtitle_content: subtitleContent,
+        auto_generate_subtitle: autoGenerateSubtitle,
         project_name: projectName.trim(),
         video_category: selectedCategory
       })
@@ -130,6 +159,8 @@ const FileUpload: React.FC<FileUploadProps> = ({ onUploadSuccess }) => {
       // 重置状态
       setFiles({})
       setProjectName('')
+      setSubtitleContent('')
+      setAutoGenerateSubtitle(false)
       setUploadProgress(0)
       setUploading(false)
       // 重置为默认分类
@@ -264,7 +295,7 @@ const FileUpload: React.FC<FileUploadProps> = ({ onUploadSuccess }) => {
             {isDragActive ? '松开鼠标导入文件' : '点击或拖拽文件到此区域'}
           </Text>
           <Text style={{ color: '#cccccc', fontSize: '14px', lineHeight: '1.5' }}>
-            支持 MP4、AVI、MOV、MKV、WebM 格式，<Text style={{ color: '#52c41a', fontWeight: 600 }}>可选择导入字幕文件(.srt)或使用AI自动生成</Text>
+            支持 MP4、AVI、MOV、MKV、WebM 格式视频文件
           </Text>
         </div>
       </div>
@@ -457,21 +488,81 @@ const FileUpload: React.FC<FileUploadProps> = ({ onUploadSuccess }) => {
             )}
           </Space>
           
-          {/* AI字幕生成提示 */}
-          {files.video && !files.srt && (
+        </div>
+      )}
+
+      {files.video && (
+        <div style={{ marginBottom: '16px' }}>
+          <Text strong style={{ color: '#ffffff', fontSize: '14px', marginBottom: '8px', display: 'block' }}>
+            字幕文件
+          </Text>
+          <input
+            ref={subtitleInputRef}
+            type="file"
+            accept=".srt"
+            onChange={handleSubtitleFileChange}
+            style={{ display: 'none' }}
+          />
+          <div style={{ display: 'flex', gap: '12px', alignItems: 'center', marginBottom: '12px' }}>
+            <Button
+              icon={<FileTextOutlined />}
+              onClick={() => subtitleInputRef.current?.click()}
+              style={{
+                height: '40px',
+                borderRadius: '12px',
+                background: 'rgba(82, 196, 26, 0.12)',
+                border: '1px solid rgba(82, 196, 26, 0.35)',
+                color: '#73d13d',
+                fontWeight: 600
+              }}
+            >
+              选择字幕文件
+            </Button>
+            <Text style={{ color: '#cccccc', fontSize: '13px' }}>
+              支持 `.srt`，也可以不选，改为粘贴字幕内容
+            </Text>
+          </div>
+
+          <Text strong style={{ color: '#ffffff', fontSize: '14px', marginBottom: '8px', display: 'block' }}>
+            字幕内容
+          </Text>
+          <TextArea
+            value={subtitleContent}
+            onChange={(e) => setSubtitleContent(e.target.value)}
+            placeholder="可直接粘贴 SRT 或纯文本字幕内容；如果已经上传 .srt 文件，这里可以留空"
+            autoSize={{ minRows: 5, maxRows: 10 }}
+            style={{
+              background: 'rgba(38, 38, 38, 0.8)',
+              border: '1px solid rgba(79, 172, 254, 0.3)',
+              color: '#ffffff',
+              borderRadius: '12px'
+            }}
+          />
+          <div style={{ marginTop: '12px' }}>
+            <Checkbox
+              checked={autoGenerateSubtitle}
+              onChange={(e) => setAutoGenerateSubtitle(e.target.checked)}
+              style={{ color: '#cccccc' }}
+            >
+              <span style={{ color: '#cccccc' }}>
+                没有字幕时，允许自动生成字幕
+              </span>
+            </Checkbox>
+          </div>
+          {!files.srt && !subtitleContent.trim() && !autoGenerateSubtitle && (
             <div style={{
               marginTop: '12px',
               padding: '12px 16px',
-              background: 'rgba(82, 196, 26, 0.1)',
-              border: '1px solid rgba(82, 196, 26, 0.3)',
+              background: 'rgba(250, 173, 20, 0.12)',
+              border: '1px solid rgba(250, 173, 20, 0.3)',
               borderRadius: '8px',
               display: 'flex',
               alignItems: 'center',
               gap: '8px'
             }}>
-              <SubnodeOutlined style={{ color: '#52c41a', fontSize: '16px' }} />
-              <Text style={{ color: '#52c41a', fontSize: '14px', fontWeight: 500 }}>
-                将使用AI语音识别自动生成字幕文件
+              <SubnodeOutlined style={{ color: '#faad14', fontSize: '16px' }} />
+              <Text style={{ color: '#faad14', fontSize: '14px', fontWeight: 500 }}>
+                需要提供字幕文件、字幕内容，或手动勾选自动生成字幕
               </Text>
             </div>
           )}
@@ -519,7 +610,7 @@ const FileUpload: React.FC<FileUploadProps> = ({ onUploadSuccess }) => {
             type="primary" 
             size="large"
             loading={uploading}
-            disabled={!files.video || !projectName.trim()}
+            disabled={!files.video || !projectName.trim() || (!files.srt && !subtitleContent.trim() && !autoGenerateSubtitle)}
             onClick={handleUpload}
             style={{
               height: '48px',
